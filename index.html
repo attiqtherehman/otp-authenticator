@@ -57,6 +57,7 @@
          width:min(92vw, 360px); display:flex; flex-direction:column; gap:10px; }
   .mbox input { width:100%; }
   .mrow { display:flex; gap:8px; justify-content:flex-end; }
+  #zoomRow input[type=range] { flex:1; min-width:120px; accent-color:#6db3ff; }
 </style>
 </head>
 <body>
@@ -87,6 +88,11 @@
       </div>
       <div class="prow"><span class="hint">...or snip the QR with Win+Shift+S and press Ctrl+V here</span></div>
       <video id="scanVideo" hidden muted playsinline></video>
+      <div class="prow" id="zoomRow" hidden>
+        <span class="hint">Zoom</span>
+        <input type="range" id="zoomCtl">
+        <span class="hint" id="zoomVal"></span>
+      </div>
       <div class="prow">
         <input type="text" id="manualIn" placeholder="Base32 secret, otpauth:// or otpauth-migration:// URI">
       </div>
@@ -487,6 +493,26 @@ async function startScan(kind) {
   authNote(kind === 'screen'
     ? 'Watching the shared screen (preview below) - now open the page with the QR. It is grabbed automatically.'
     : 'Point the camera at the QR code...');
+  if (kind === 'camera') {
+    /* start at 2x zoom and offer a slider, where the camera supports it */
+    try {
+      const track = scanStream.getVideoTracks()[0];
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      if (caps.zoom && caps.zoom.max > caps.zoom.min) {
+        const z = $('zoomCtl');
+        z.min = caps.zoom.min; z.max = caps.zoom.max; z.step = caps.zoom.step || 0.1;
+        const initial = Math.max(caps.zoom.min, Math.min(2, caps.zoom.max));
+        z.value = initial;
+        $('zoomVal').textContent = (+initial).toFixed(1) + 'x';
+        track.applyConstraints({ advanced: [{ zoom: initial }] }).catch(function () {});
+        z.oninput = () => {
+          $('zoomVal').textContent = (+z.value).toFixed(1) + 'x';
+          track.applyConstraints({ advanced: [{ zoom: +z.value }] }).catch(function () {});
+        };
+        $('zoomRow').hidden = false;
+      }
+    } catch (e) {}
+  }
   let tries = 0, busy = false;
   scanInt = setInterval(async () => {
     const w = v.videoWidth, h = v.videoHeight;
@@ -511,6 +537,7 @@ function stopScan() {
   if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
   const v = $('scanVideo');
   v.srcObject = null; v.hidden = true;
+  $('zoomRow').hidden = true;
   if (scanBtn) { scanBtn.textContent = scanBtn.id === 'btnScan' ? 'Scan screen' : 'Camera'; scanBtn = null; }
 }
 
