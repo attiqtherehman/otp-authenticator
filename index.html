@@ -57,7 +57,22 @@
          width:min(92vw, 360px); display:flex; flex-direction:column; gap:10px; }
   .mbox input { width:100%; }
   .mrow { display:flex; gap:8px; justify-content:flex-end; }
-  #zoomRow input[type=range] { flex:1; min-width:120px; accent-color:#6db3ff; }
+  #camOverlay { position:fixed; inset:0; background:#000; z-index:30; display:flex;
+         align-items:center; justify-content:center; }
+  #camOverlay[hidden] { display:none; }
+  #camVideo { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  #camFrame { position:relative; width:min(70vw, 55vh); aspect-ratio:1/1;
+         border:3px solid rgba(255,255,255,.9); border-radius:18px;
+         box-shadow:0 0 0 200vmax rgba(0,0,0,.45); }
+  #camClose { position:absolute; top:14px; right:14px; z-index:2; background:rgba(15,17,21,.6);
+         border:0; color:#fff; font-size:20px; width:42px; height:42px; border-radius:50%; cursor:pointer; }
+  #camHint { position:absolute; bottom:92px; left:0; right:0; text-align:center;
+         color:rgba(255,255,255,.9); font-size:14px; text-shadow:0 1px 4px #000; z-index:2; }
+  #camZoomRow { position:absolute; bottom:30px; left:50%; transform:translateX(-50%); z-index:2;
+         width:min(70vw, 320px); display:flex; gap:10px; align-items:center; }
+  #camZoomRow[hidden] { display:none; }
+  #camZoomRow input[type=range] { flex:1; accent-color:#6db3ff; }
+  #camZoomRow .czoom { color:#fff; font-size:13px; text-shadow:0 1px 4px #000; min-width:22px; }
 </style>
 </head>
 <body>
@@ -88,11 +103,6 @@
       </div>
       <div class="prow"><span class="hint">...or snip the QR with Win+Shift+S and press Ctrl+V here</span></div>
       <video id="scanVideo" hidden muted playsinline></video>
-      <div class="prow" id="zoomRow" hidden>
-        <span class="hint">Zoom</span>
-        <input type="range" id="zoomCtl">
-        <span class="hint" id="zoomVal"></span>
-      </div>
       <div class="prow">
         <input type="text" id="manualIn" placeholder="Base32 secret, otpauth:// or otpauth-migration:// URI">
       </div>
@@ -103,6 +113,17 @@
     </div>
     <div id="authMsg"></div>
     <div id="alist"></div>
+  </div>
+</div>
+<div id="camOverlay" hidden>
+  <video id="camVideo" muted playsinline></video>
+  <button id="camClose" title="Close">&#10005;</button>
+  <div id="camFrame"></div>
+  <div id="camHint">Point at the QR code</div>
+  <div id="camZoomRow" hidden>
+    <span class="czoom">Zoom</span>
+    <input type="range" id="zoomCtl">
+    <span class="czoom" id="zoomVal"></span>
   </div>
 </div>
 <div id="modal" hidden>
@@ -485,15 +506,16 @@ async function startScan(kind) {
   }
   scanBtn = $(kind === 'screen' ? 'btnScan' : 'btnCam');
   scanBtn.textContent = 'Stop';
-  const v = $('scanVideo');
+  const cam = kind === 'camera';
+  const v = $(cam ? 'camVideo' : 'scanVideo');
   v.srcObject = scanStream;
-  v.hidden = false;
+  if (cam) { $('camHint').textContent = 'Point at the QR code'; $('camOverlay').hidden = false; }
+  else v.hidden = false;
   await v.play();
-  const label = kind === 'screen' ? 'screen scan' : 'camera scan';
-  authNote(kind === 'screen'
-    ? 'Watching the shared screen (preview below) - now open the page with the QR. It is grabbed automatically.'
-    : 'Point the camera at the QR code...');
-  if (kind === 'camera') {
+  const label = cam ? 'camera scan' : 'screen scan';
+  const note = cam ? (m => { $('camHint').textContent = m; }) : authNote;
+  if (!cam) authNote('Watching the shared screen (preview below) - now open the page with the QR. It is grabbed automatically.');
+  if (cam) {
     /* start at 2x zoom and offer a slider, where the camera supports it */
     try {
       const track = scanStream.getVideoTracks()[0];
@@ -509,7 +531,7 @@ async function startScan(kind) {
           $('zoomVal').textContent = (+z.value).toFixed(1) + 'x';
           track.applyConstraints({ advanced: [{ zoom: +z.value }] }).catch(function () {});
         };
-        $('zoomRow').hidden = false;
+        $('camZoomRow').hidden = false;
       }
     } catch (e) {}
   }
@@ -518,7 +540,7 @@ async function startScan(kind) {
     const w = v.videoWidth, h = v.videoHeight;
     tries++;
     if (!w) {
-      if (tries % 6 === 0) authNote('Scanning... waiting for video frames');
+      if (tries % 6 === 0) note('Waiting for video frames...');
       return;
     }
     if (busy) return;
@@ -528,16 +550,19 @@ async function startScan(kind) {
     busy = false;
     if (!scanInt) return;
     if (r && r.data) { stopScan(); handleDecoded(r.data, label); return; }
-    if (tries % 6 === 0) authNote('Scanning ' + w + 'x' + h + ', ' + tries + ' passes - no QR yet. Bring the QR fully into view.');
+    if (tries % 6 === 0) note(cam
+      ? 'No QR yet - hold the code steady inside the frame'
+      : 'Scanning ' + w + 'x' + h + ', ' + tries + ' passes - no QR yet. Bring the QR fully into view.');
   }, 350);
   scanStream.getVideoTracks()[0].onended = stopScan;
 }
 function stopScan() {
   if (scanInt) { clearInterval(scanInt); scanInt = null; }
   if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
-  const v = $('scanVideo');
-  v.srcObject = null; v.hidden = true;
-  $('zoomRow').hidden = true;
+  $('scanVideo').srcObject = null; $('scanVideo').hidden = true;
+  $('camVideo').srcObject = null;
+  $('camOverlay').hidden = true;
+  $('camZoomRow').hidden = true;
   if (scanBtn) { scanBtn.textContent = scanBtn.id === 'btnScan' ? 'Scan screen' : 'Camera'; scanBtn = null; }
 }
 
@@ -631,6 +656,8 @@ $('btnUpload').onclick = () => $('qrFile').click();
 $('qrFile').onchange = () => { if ($('qrFile').files[0]) fileToQr($('qrFile').files[0], 'uploaded image'); $('qrFile').value = ''; };
 $('btnScan').onclick = () => { if (scanInt && scanBtn && scanBtn.id === 'btnScan') stopScan(); else startScan('screen'); };
 $('btnCam').onclick = () => { if (scanInt && scanBtn && scanBtn.id === 'btnCam') stopScan(); else startScan('camera'); };
+$('camClose').onclick = stopScan;
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('camOverlay').hidden) stopScan(); });
 $('btnManualAdd').onclick = manualAdd;
 $('manualIn').onkeydown = e => { if (e.key === 'Enter') manualAdd(); };
 $('btnExport').onclick = exportVault;
